@@ -41,7 +41,7 @@ private:
     QString pathSelected;
 
     //void showMat(cv::Mat mat);
-    void showProcessByColor(cv::Mat mat);
+    void showMat(cv::Mat mat);
     void showProcessBySobel(cv::Mat mat);
 
     void showMatSplitResult(cv::Mat , std::vector<cv::Rect> );

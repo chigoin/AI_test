@@ -22,107 +22,129 @@ MainWindow::~MainWindow()
     delete ui;
 }
 
-void MainWindow::showProcessByColor(cv::Mat mat)
+void MainWindow::showMat(cv::Mat mat)
 {
-    this->ui->tabWidget->clear();
+        this->ui->tabWidget->clear();
+        QImage image = ImageUtilities::Mat2QImage(mat,QImage::Format_RGB888);
 
-    QImage image = ImageUtilities::Mat2QImage(mat,QImage::Format_RGB888);
+        //构建Tab页面
+        QWidget* tabOriginal = this->generateImageLabel(mat,QImage::Format_RGB888);
+        this->ui->tabWidget->addTab(tabOriginal,tr("SOURCE"));
 
-    //构建Tab页面
-    QWidget* tabOriginal = this->generateImageLabel(mat,QImage::Format_RGB888);
-    this->ui->tabWidget->addTab(tabOriginal,tr("原图"));
+        //将BGR图片转化为HSV图片
+        cv::Mat matHSV;
+        cv::cvtColor(mat,matHSV,cv::COLOR_BGR2HSV);
+        QWidget* tabHSV = this->generateImageLabel(matHSV,QImage::Format_RGB888);
+        this->ui->tabWidget->addTab(tabHSV,tr("HSV"));
 
-    //HCV色彩空间
+        //分通道
+        cv::Mat* matHSVs = new cv::Mat[3];
+        cv::split(matHSV,matHSVs);
+        QWidget* tabH = this->generateImageLabel(matHSVs[0],QImage::Format_Grayscale8);
+        this->ui->tabWidget->addTab(tabH,tr("H"));
+        QWidget* tabS = this->generateImageLabel(matHSVs[1],QImage::Format_Grayscale8);
+        this->ui->tabWidget->addTab(tabS,tr("S"));
+        QWidget* tabV = this->generateImageLabel(matHSVs[2],QImage::Format_Grayscale8);
+        this->ui->tabWidget->addTab(tabV,tr("V"));
 
-    cv::Mat matHSV;
-    cv::cvtColor(mat,matHSV,cv::COLOR_BGR2HSV);
-    QWidget* tabHSV = this->generateImageLabel(matHSV,QImage::Format_RGB888);
-    this->ui->tabWidget->addTab(tabHSV,tr("HSV"));
+        //matV的均衡
+        cv::Mat matV_EqualizeHis;
+        cv::equalizeHist(matHSVs[2],matV_EqualizeHis);
+        QWidget* tabV_EqualizeHis = this->generateImageLabel(matV_EqualizeHis,QImage::Format_Grayscale8);
+        this->ui->tabWidget->addTab(tabV_EqualizeHis,tr("V_Eq"));
 
-    cv::Mat* matHSVs = new cv::Mat[3];
-    cv::split(matHSV,matHSVs);
+        //合并
+        matHSVs[2] = matV_EqualizeHis;
+        cv::Mat matHSV_Eq;
+        cv::merge(matHSVs,3, matHSV_Eq);
+        QWidget* tabHSV_Eq = this->generateImageLabel(matHSV_Eq,QImage::Format_RGB888);
+        this->ui->tabWidget->addTab(tabHSV_Eq,tr("HSV_Eq"));
 
-    QWidget* tabH = this->generateImageLabel(matHSVs[0],QImage::Format_Grayscale8);
-    this->ui->tabWidget->addTab(tabH,tr("H"));
+        //在均衡化后的HSV颜色空间中寻找黄色区域
+        cv::Scalar yellow_Low(15,95,95);
+        cv::Scalar yellow_Upper(40,255,255);
+        cv::Mat matYellow;
+        cv::inRange(matHSV_Eq,yellow_Low,yellow_Upper,matYellow);
+        QWidget* tabYellow = this->generateImageLabel(matYellow,QImage::Format_Grayscale8);
+        this->ui->tabWidget->addTab(tabYellow,tr("Yellow"));
 
-    QWidget* tabS = this->generateImageLabel(matHSVs[1],QImage::Format_Grayscale8);
-    this->ui->tabWidget->addTab(tabS,tr("S"));
+        //在均衡化后的HSV颜色空间寻找蓝色区域
+        cv::Scalar blue_low(100,95,95);
+        cv::Scalar blue_upper(140,255,255);
+        cv::Mat matBlue;
+        cv::inRange(matHSV_Eq,blue_low,blue_upper,matBlue);
+        QWidget* tabBlue = this->generateImageLabel(matBlue,QImage::Format_Grayscale8);
+        this->ui->tabWidget->addTab(tabBlue,tr("Blue"));
 
-    QWidget* tabV = this->generateImageLabel(matHSVs[2],QImage::Format_Grayscale8);
-    this->ui->tabWidget->addTab(tabV,tr("V"));
+        //使用形态学操作来对选定的颜色区域进行处理，矩形块
+        //膨胀
+        cv::Mat element = cv::getStructuringElement(cv::MORPH_RECT,cv::Size(7,3));
+        cv::Mat matYellow_Dilate;
+        cv::dilate(matYellow,matYellow_Dilate,element);
 
-    //均衡化处理
+        QWidget* tabYellow_Dilate = this->generateImageLabel(matYellow_Dilate,QImage::Format_Grayscale8);
+        this->ui->tabWidget->addTab(tabYellow_Dilate,tr("Yellow_D"));
+        //腐蚀
+        cv::Mat matYellow_Erode;
+        cv::erode(matYellow_Dilate,matYellow_Erode,element);
+        element = cv::getStructuringElement(cv::MORPH_RECT,cv::Size(3,3));
 
-    cv::Mat matEqualization_V;
-    cv::equalizeHist(matHSVs[0],matEqualization_V);
-    QWidget* tabE_V = this->generateImageLabel(matEqualization_V,QImage::Format_Grayscale8);
-    this->ui->tabWidget->addTab(tabE_V,tr("E_V"));
+        QWidget* tabYellow_Erode = this->generateImageLabel(matYellow_Erode,QImage::Format_Grayscale8);
+        this->ui->tabWidget->addTab(tabYellow_Erode,tr("Yellow_E"));
 
-    //颜色识别
-    cv::Mat matHSV_E;
-    cv::merge(matHSVs,3,matHSV_E);
-    QWidget* tabHSV_E = this->generateImageLabel(matHSV_E,QImage::Format_RGB888);
-    this->ui->tabWidget->addTab(tabHSV_E,tr("HSV_E"));
+        //寻找车牌
+        std::vector<std::vector<cv::Point>> contours;
+        std::vector<std::vector<cv::Point>> contoursYellow;
+        std::vector<std::vector<cv::Point>> contoursBlue;
+        std::vector<cv::Vec4i> hierarchy;
+        cv::findContours(matYellow_Dilate,contours,hierarchy,cv::RETR_TREE,cv::CHAIN_APPROX_SIMPLE);
+        cv::Mat matContours = mat.clone();
+        cv::drawContours(matContours,contours,-1,cv::Scalar(0,0,255),2);
+        QWidget* tabContours = this->generateImageLabel(matContours,QImage::Format_RGB888);
+        this->ui->tabWidget->addTab(tabContours,tr("Contours"));
 
-    cv::Scalar yellow_Low(100,43,46);
-    cv::Scalar yellow_Up(124,255,255);
-    cv::Mat matYellow;
+        //求轮廓的最小外接矩形
+        cv::Mat matRects = mat.clone();
+        std::vector<cv::Rect> rects;
+        for (int index = 0; index < contours.size();index++)
+        {
+           cv::Rect rect = cv::boundingRect(contours[index]);
+           double radio=rect.width/rect.height;
+           if(radio<5.0)
+           {
+               rects.push_back(rect);
+               cv::rectangle(matRects,rect,cv::Scalar(255,0,0),1);
+           }
 
-    cv::inRange(matHSV_E,yellow_Low,yellow_Up,matYellow);
-    QWidget* tabYellow = this->generateImageLabel(matYellow,QImage::Format_Grayscale8);
-    this->ui->tabWidget->addTab(tabYellow,tr("Yellow"));
+         }
 
-    //膨胀腐蚀
-    cv::Mat element;
-    element = cv::getStructuringElement(cv::MORPH_RECT,cv::Size(3,3) );
-    cv::Mat matYellow_dilate;
-    cv::dilate(matYellow,matYellow_dilate,element);
-    QWidget* tabYellow_dilate = this->generateImageLabel(matYellow_dilate,QImage::Format_Grayscale8);
-    this->ui->tabWidget->addTab(tabYellow_dilate,tr("Yellow_dilate"));
-    cv::Mat matYellow_erode;
-    cv::erode(matYellow_dilate,matYellow_erode,element);
-    QWidget* tabYellow_erode = this->generateImageLabel(matYellow_erode,QImage::Format_Grayscale8);
-    this->ui->tabWidget->addTab(tabYellow_erode,tr("Yellow_erode"));
+         QWidget* tabRects = this->generateImageLabel(matRects,QImage::Format_RGB888);
+         this->ui->tabWidget->addTab(tabRects,tr("Rects"));
+         this->showMatSplitResult(mat,rects);
 
-    std::vector<std::vector<cv::Point>> contours;
-    cv::findContours(matYellow_dilate,contours,cv::RETR_TREE,cv::CHAIN_APPROX_NONE);
-    cv::Mat matClone = mat.clone();
-    cv::drawContours(matClone,contours,-1,cv::Scalar(0,0,255),2);
-    QWidget* tabmatClone = this->generateImageLabel(matClone,QImage::Format_RGB888);
-    this->ui->tabWidget->addTab(tabmatClone,tr("contours"));
 
-    //求轮廓最小外接矩形
-    cv::Mat matRects = mat.clone();
-    std::vector<cv::Rect> rects;
-    for (int index = 0;index < contours.size();index++)
-    {
-        cv::Rect rect = cv::boundingRect(contours[index]);
-        rects.push_back(rect);
-        cv::rectangle(matRects,rect,cv::Scalar(255,0,0),1);
 
-    }
-    QWidget* tabRects = this->generateImageLabel(matRects,QImage::Format_RGB888);
-    this->ui->tabWidget->addTab(tabRects,tr("Rects"));
 
-    this->showMatSplitResult(mat,rects);
+      mat.release();
+      matHSV.release();
+      delete[] matHSVs;
+      matRects.release();
+      matYellow.release();
+      matContours.release();
+      matHSV_Eq.release();
+      matYellow_Erode.release();
+      matYellow_Dilate.release();
+      matBlue.release();
+      matV_EqualizeHis.release();
 
-    mat.release();
-    matHSV.release();
-    matEqualization_V.release();
-    matHSV_E.release();
-    matYellow.release();
-    matYellow_erode.release();
-    matYellow_dilate.release();
-    matRects.release();
-    matClone.release();
 }
+
 
 void MainWindow::showProcessBySobel(cv::Mat mat)
 {
     if(mat.empty()) return;
-    this->ui->tabWidget->clear();
 
-    QImage image = ImageUtilities::Mat2QImage(mat,QImage::Format_RGB888);
+    this->ui->tabWidget->clear();
 
     //构建Tab页面
     QWidget* tabOriginal = this->generateImageLabel(mat,QImage::Format_RGB888);
@@ -131,67 +153,87 @@ void MainWindow::showProcessBySobel(cv::Mat mat)
     //高斯模糊
     cv::Mat matBlur;
     cv::GaussianBlur(mat,matBlur,cv::Size(3,3),0);
-    QWidget* tabBlur = this->generateImageLabel(matBlur,QImage::Format_Grayscale8);
-    this->ui->tabWidget->addTab(tabBlur,tr("模糊图"));
+
+    QWidget* tabBlur = this->generateImageLabel(matBlur,QImage::Format_RGB888);
+    this->ui->tabWidget->addTab(tabBlur,tr("模糊"));
 
     //灰度处理
-    cv::Mat matGray ;
+    cv::Mat matGray;
     cv::cvtColor(matBlur,matGray,cv::COLOR_BGR2GRAY);
+
     QWidget* tabGray = this->generateImageLabel(matGray,QImage::Format_Grayscale8);
-    this->ui->tabWidget->addTab(tabGray,tr("灰度图"));
+    this->ui->tabWidget->addTab(tabGray,tr("灰度"));
 
     cv::Mat grad_X;
     cv::Sobel(matGray,grad_X,CV_16S,1,0);
-    cv::Mat grad_Xabs;
-    cv::convertScaleAbs(grad_X,grad_Xabs);
+    cv::Mat grad_X_abs;
+    cv::convertScaleAbs(grad_X,grad_X_abs);
+
     cv::Mat grad_Y;
-    cv::Sobel(matGray,grad_Y,CV_16S,1,0);
-    cv::Mat grad_Yabs;
-    cv::convertScaleAbs(grad_Y,grad_Yabs);
+    cv::Sobel(matGray,grad_Y,CV_16S,0,1);
+    cv::Mat grad_Y_abs;
+    cv::convertScaleAbs(grad_Y,grad_Y_abs);
 
     cv::Mat matGrad;
-    cv::addWeighted(grad_Xabs,1,grad_Yabs,0,0,matGrad);
+    cv::addWeighted(grad_X_abs,1,grad_Y_abs,0,0,matGrad);
+
     QWidget* tabGrad = this->generateImageLabel(matGrad,QImage::Format_Grayscale8);
-    this->ui->tabWidget->addTab(tabGrad,tr("梯度图"));
+    this->ui->tabWidget->addTab(tabGrad,tr("梯度"));
 
     cv::Mat matThreshold;
     cv::threshold(matGrad,matThreshold,100,255,cv::THRESH_BINARY);
     QWidget* tabThreshold = this->generateImageLabel(matThreshold,QImage::Format_Grayscale8);
     this->ui->tabWidget->addTab(tabThreshold,tr("二值化"));
 
-    cv::Mat element;
-    element = cv::getStructuringElement(cv::MORPH_RECT,cv::Size(7,1) );
-    cv::Mat matMorphologyEx_C;
-    cv::morphologyEx(matThreshold,matMorphologyEx_C,cv::MORPH_CLOSE,element);
-    QWidget* tabMorphologyEx_C = this->generateImageLabel(matMorphologyEx_C,QImage::Format_Grayscale8);
-    this->ui->tabWidget->addTab(tabMorphologyEx_C,tr("闭操作"));
+    cv::Mat element = cv::getStructuringElement(cv::MORPH_RECT,cv::Size(11,3));
+    cv::Mat matClose;
+    cv::morphologyEx(matThreshold,matClose,cv::MORPH_CLOSE,element);
 
-    cv::Mat matYellow_erode;
-    cv::erode(matMorphologyEx_C,matYellow_erode,element);
-    QWidget* tabYellow_erode = this->generateImageLabel(matYellow_erode,QImage::Format_Grayscale8);
-    this->ui->tabWidget->addTab(tabYellow_erode,tr("腐蚀"));
 
+    QWidget* tabClose = this->generateImageLabel(matClose,QImage::Format_Grayscale8);
+    this->ui->tabWidget->addTab(tabClose,tr("闭操作"));
+    //腐蚀操作
+    element = cv::getStructuringElement(cv::MORPH_RECT,cv::Size(3,3));
+    cv::Mat matErode;
+    cv::erode(matClose,matErode,element);
+
+    QWidget* tabErode = this->generateImageLabel(matErode,QImage::Format_Grayscale8);
+    this->ui->tabWidget->addTab(tabErode,tr("腐蚀"));
+    //求轮廓操作
+    std::vector<std::vector<cv::Point>> contours;
+    std::vector<cv::Vec4i> hierarchy;
+    cv::findContours(matErode,contours,hierarchy,cv::RETR_TREE,cv::CHAIN_APPROX_SIMPLE);
+
+    cv::Mat matContours = mat.clone();
+    cv::drawContours(matContours,contours,-1,cv::Scalar(0,0,255),2);
+
+    QWidget* tabContours = this->generateImageLabel(matContours,QImage::Format_RGB888);
+    this->ui->tabWidget->addTab(tabContours,tr("轮廓"));
+
+    //求轮廓的最小外接矩形
+    cv::Mat matRects = mat.clone();
+    std::vector<cv::Rect> rects;
+    for (int index = 0; index < contours.size();index++)
+    {
+        cv::Rect rect = cv::boundingRect(contours[index]);
+        if(rect.width>rect.height)
+        {
+            rects.push_back(rect);
+            cv::rectangle(matRects,rect,cv::Scalar(255,0,0),1);
+        }
+     }
+
+    QWidget* tabRects = this->generateImageLabel(matRects,QImage::Format_RGB888);
+    this->ui->tabWidget->addTab(tabRects,tr("Rects"));
+
+    this->showMatSplitResult(mat,rects);
 
 }
+
 
 QLabel* MainWindow::generateImageLabel(cv::Mat mat,QImage::Format format)
 {
     QLabel* lblImage = new QLabel();
-    /*QImage image;
-    if(mat.cols>1000)
-    {
-        cv::Mat resize;
-        cv::Size outsize;
-        outsize.width = mat.cols*0.15;
-        outsize.height = mat.rows*0.15;
-        cv::resize(mat,resize,outsize,0,0,cv::INTER_NEAREST);
-        image = ImageUtilities::Mat2QImage(resize,format);
-        resize.release();
-    }
-    else
-    {
-        image = ImageUtilities::Mat2QImage(mat,format);
-    }*/
     QImage image = ImageUtilities::Mat2QImage(mat,format);
     QPixmap pixmap = QPixmap::fromImage(image);
 
@@ -204,16 +246,29 @@ QLabel* MainWindow::generateImageLabel(cv::Mat mat,QImage::Format format)
 void MainWindow::showMatSplitResult(cv::Mat mat, std::vector<cv::Rect> rects)
 {
     this->ui->lstImages->clear();
-
+    //this->ui->lstImages->setIconSize(QSize(1000,1000));
     if(mat.empty()) return;
     for (int index = 0; index < rects.size(); index++)
     {
         cv::Mat roi = mat(rects[index]);
         QPixmap pixmap = QPixmap::fromImage(ImageUtilities::Mat2QImage(roi,QImage::Format_RGB888));
         QIcon iconImage(pixmap);
-        QListWidgetItem *listWidgetItem = new QListWidgetItem();
-        listWidgetItem->setIcon(iconImage);
-        this->ui->lstImages->addItem(listWidgetItem);
+        QListWidgetItem *listWidgetItem = new QListWidgetItem(this->ui->lstImages,0);
+        listWidgetItem->setSizeHint(QSize(150,150));
+        QWidget *w = new QWidget(this->ui->lstImages);
+        QHBoxLayout *layout=new QHBoxLayout(w);
+        QLabel *imgLabel=new QLabel(w);
+
+        int width =imgLabel->width();
+        //int height =imgLabel->height();
+        QPixmap fitpixmap = pixmap.scaled(width, pixmap.height()*(width/pixmap.width()),Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+        imgLabel->setPixmap(fitpixmap);
+        layout->addWidget(imgLabel);
+        w->setLayout(layout);
+        w->show();
+        this->ui->lstImages->setItemWidget(listWidgetItem,w);
+        this->ui->lstImages->show();
+
     }
 }
 
@@ -256,13 +311,13 @@ void MainWindow::on_lstFiles_currentItemChanged(QListWidgetItem *current, QListW
         outsize.height = mat.rows*0.5;
         cv::resize(mat,resize,outsize,0,0,cv::INTER_NEAREST);
         //this->showProcessBySobel(resize);
-        this->showProcessByColor(resize);
+        this->showMat(resize);
         resize.release();
 
     }
     else {
+            this->showMat(mat);
             //this->showProcessBySobel(mat);
-        this->showProcessBySobel(mat);
     }
 
 }
