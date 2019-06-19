@@ -1,5 +1,6 @@
 ﻿#include "mainwindow.h"
 #include "ui_mainwindow.h"
+#include <stdio.h>
 
 MainWindow::MainWindow(QWidget *parent) :
     QMainWindow(parent),
@@ -92,12 +93,22 @@ void MainWindow::showMat(cv::Mat mat)
         QWidget* tabYellow_Erode = this->generateImageLabel(matYellow_Erode,QImage::Format_Grayscale8);
         this->ui->tabWidget->addTab(tabYellow_Erode,tr("Yellow_E"));
 
+        //对蓝色进行膨胀操作
+        cv::Mat elementBlue = cv::getStructuringElement(cv::MORPH_RECT,cv::Size(7,3));
+        cv::Mat matBlue_Dilate;
+        cv::dilate(matBlue,matBlue_Dilate,elementBlue);
+
         //寻找车牌
-        std::vector<std::vector<cv::Point>> contours;
+
         std::vector<std::vector<cv::Point>> contoursYellow;
         std::vector<std::vector<cv::Point>> contoursBlue;
-        std::vector<cv::Vec4i> hierarchy;
-        cv::findContours(matYellow_Dilate,contours,hierarchy,cv::RETR_TREE,cv::CHAIN_APPROX_SIMPLE);
+        std::vector<std::vector<cv::Point>> contours;
+        std::vector<cv::Vec4i> hierarchyYellow;
+        std::vector<cv::Vec4i> hierarchyBlue;
+        cv::findContours(matYellow_Dilate,contoursYellow,hierarchyYellow,cv::RETR_TREE,cv::CHAIN_APPROX_SIMPLE);
+        cv::findContours(matBlue_Dilate,contoursBlue,hierarchyBlue,cv::RETR_TREE,cv::CHAIN_APPROX_SIMPLE);
+        contours.insert(contours.end(),contoursBlue.begin(),contoursBlue.end());
+        contours.insert(contours.end(),contoursYellow.begin(),contoursYellow.end());
         cv::Mat matContours = mat.clone();
         cv::drawContours(matContours,contours,-1,cv::Scalar(0,0,255),2);
         QWidget* tabContours = this->generateImageLabel(matContours,QImage::Format_RGB888);
@@ -110,7 +121,7 @@ void MainWindow::showMat(cv::Mat mat)
         {
            cv::Rect rect = cv::boundingRect(contours[index]);
            double radio=rect.width/rect.height;
-           if(radio<5.0)
+           if(0.95<radio<2.5)
            {
                rects.push_back(rect);
                cv::rectangle(matRects,rect,cv::Scalar(255,0,0),1);
